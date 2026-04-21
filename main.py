@@ -17,31 +17,35 @@ def consultar(
     marca: Optional[str] = Query(None),
     region: Optional[str] = Query(None),
     cliente: Optional[str] = Query(None),
-    dia: Optional[int] = Query(None)
+    dia: Optional[str] = Query(None)  # Lo cambiamos a str para evitar el error 422
 ):
-    # Iniciamos con la base completa
     df_filtrado = df.copy()
 
-    # Diccionario de filtros dinámicos (Columna en CSV : Valor recibido)
+    # Procesamos el día solo si no está vacío y es un número
+    dia_final = None
+    if dia and dia.strip():
+        try:
+            dia_final = int(dia)
+        except ValueError:
+            pass # Si no es un número válido, lo ignoramos
+
     filtros = {
         'desc_marca': marca,
         'Region': region,
         'nomb_cliente': cliente,
-        'Día de fecha_liquidacion': dia
+        'Día de fecha_liquidacion': dia_final
     }
 
-    # Aplicamos cada filtro si existe
     for columna, valor in filtros.items():
-        if valor is not None:
+        if valor is not None and str(valor).strip() != "":
             if isinstance(valor, str):
                 df_filtrado = df_filtrado[df_filtrado[columna].str.contains(valor, case=False, na=False)]
             else:
                 df_filtrado = df_filtrado[df_filtrado[columna] == valor]
 
     if df_filtrado.empty:
-        return {"error": "No se encontraron datos para los filtros aplicados", "filtros": filtros}
+        return {"mensaje": "No se encontraron datos", "registros": 0}
 
-    # Respuesta enriquecida para que la IA tenga contexto
     return {
         "status": "success",
         "resumen": {
@@ -50,6 +54,5 @@ def consultar(
             "cantidad_registros": len(df_filtrado)
         },
         "top_marcas": df_filtrado.groupby('desc_marca')['VN'].sum().sort_values(ascending=False).head(3).to_dict(),
-        "top_regiones": df_filtrado.groupby('Region')['VN'].sum().sort_values(ascending=False).to_dict(),
         "filtros_aplicados": {k: v for k, v in filtros.items() if v is not None}
     }
