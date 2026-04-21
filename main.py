@@ -4,31 +4,25 @@ from typing import Optional
 
 app = FastAPI()
 
-# Carga con separador punto y coma
+# Carga y limpieza
 df = pd.read_csv('fuente.csv', sep=';')
-
-# Limpieza robusta de números
 for col in ['Vol', 'VN']:
-    # Convertimos a string, quitamos comas y convertimos a float
     df[col] = df[col].astype(str).str.replace(',', '').astype(float)
 
+# Aseguramos que la columna de Mes/Año sea tratada correctamente para filtrar
+# Basado en tu archivo: "abril de 2025" y "abril de 2026"
 @app.get("/consultar")
 def consultar(
     marca: Optional[str] = Query(None),
     region: Optional[str] = Query(None),
     cliente: Optional[str] = Query(None),
-    dia: Optional[str] = Query(None)  # Lo cambiamos a str para evitar el error 422
+    dia: Optional[str] = Query(None)
 ):
     df_filtrado = df.copy()
 
-    # Procesamos el día solo si no está vacío y es un número
-    dia_final = None
-    if dia and dia.strip():
-        try:
-            dia_final = int(dia)
-        except ValueError:
-            pass # Si no es un número válido, lo ignoramos
-
+    # 1. Aplicación de filtros dinámicos
+    dia_final = int(dia) if (dia and dia.strip().isdigit()) else None
+    
     filtros = {
         'desc_marca': marca,
         'Region': region,
@@ -37,22 +31,55 @@ def consultar(
     }
 
     for columna, valor in filtros.items():
-        if valor is not None and str(valor).strip() != "":
+        if valor is not None:
             if isinstance(valor, str):
                 df_filtrado = df_filtrado[df_filtrado[columna].str.contains(valor, case=False, na=False)]
             else:
                 df_filtrado = df_filtrado[df_filtrado[columna] == valor]
 
     if df_filtrado.empty:
-        return {"mensaje": "No se encontraron datos", "registros": 0}
+        return {"error": "Sin datos para estos filtros", "registros": 0}
+
+    # 2. SEPARACIÓN POR AÑO (Análisis Comparativo)
+    df_2025 = df_filtrado[df_filtrado['Mes, Año de fecha_liquidacion'].str.contains('2025', na=False)]
+    df_2026 = df_filtrado[df_filtrado['Mes, Año de fecha_liquidacion'].str.contains('2026', na=False)]
+
+    vn_2025 = round(df_2025['VN'].sum(), 2)
+    vn_2026 = round(df_2026['VN'].sum(), 2)
+    
+    # Cálculo de variación porcentual
+    variacion = 0
+    if vn_2025 > 0:
+        variacion = round(((vn_2026 - vn_2025) / vn_2025) * 100, 2)
+
+    # 3. EXTRACCIÓN DE INSIGHTS (Análisis profundo)
+    def obtener_insights(d_frame):
+        if d_frame.empty: return None
+        # Día de más ventas
+        top_dia = d_frame.groupby('Día de fecha_liquidacion')['VN'].sum().idxmax()
+        # Mejor cliente
+        top_cliente = d_frame.groupby('nomb_cliente')['VN'].sum().idxmax()
+        # Marca líder (en caso de que el filtro sea por región/cliente)
+        top_marca = d_frame.groupby('desc_marca')['VN'].sum().idxmax()
+        return {
+            "dia_pico": int(top_dia),
+            "cliente_estrella": top_cliente,
+            "marca_lider": top_marca
+        }
 
     return {
         "status": "success",
-        "resumen": {
-            "total_venta_neta": round(float(df_filtrado['VN'].sum()), 2),
-            "total_unidades": int(df_filtrado['Vol'].sum()),
-            "cantidad_registros": len(df_filtrado)
+        "comparativo_anual": {
+            "venta_2025": vn_2025,
+            "venta_2026": vn_2026,
+            "variacion_porcentual": f"{variacion}%",
+            "estado": "Crecimiento" if variacion > 0 else "Caída"
         },
-        "top_marcas": df_filtrado.groupby('desc_marca')['VN'].sum().sort_values(ascending=False).head(3).to_dict(),
-        "filtros_aplicados": {k: v for k, v in filtros.items() if v is not None}
+        "analisis_detallado_2026": obtener_insights(df_2026),
+        "analisis_detallado_2025": obtener_insights(df_2025),
+        "contexto_adicional": {
+            "unidades_totales_2026": int(df_2026['Vol'].sum()),
+            "regiones_activas": df_filtrado['Region'].unique().tolist()
+        },
+        "filtros_usados": {k: v for k, v in filtros.items() if v is not None}
     }
